@@ -1,0 +1,118 @@
+function display_plugins_table() {
+	global $wp_list_table;
+
+	switch ( current_filter() ) {
+		case 'install_plugins_beta':
+			printf(
+				/* translators: %s: URL to "Features as Plugins" page. */
+				'<p>' . __( 'You are using a development version of WordPress. These feature plugins are also under development. <a href="%s">Learn more</a>.' ) . '</p>',
+				'https://make.wordpress.org/core/handbook/about/release-cycle/features-as-plugins/'
+			);
+			break;
+		case 'install_plugins_featured':
+			printf(
+				/* translators: %s: https://wordpress.org/plugins/ */
+				'<p>' . __( 'Plugins extend and expand the functionality of WordPress. You may automatically install plugins from the <a href="%s">WordPress Plugin Directory</a> or upload a plugin in .zip format by clicking the button at the top of this page.' ) . '</p>',
+				__( 'https://wordpress.org/plugins/' )
+			);
+			break;
+		case 'install_plugins_recommended':
+			echo '<p>' . __( 'These suggestions are based on the plugins you and other users have installed.' ) . '</p>';
+			break;
+		case 'install_plugins_favorites':
+			if ( empty( $_GET['user'] ) && ! get_user_option( 'wporg_favorites' ) ) {
+				return;
+			}
+			break;
+	}
+	?>
+	<form id="plugin-filter" method="post">
+		<?php $wp_list_table->display(); ?>
+	</form>
+	<?php
+}
+
+
+
+
+
+
+
+
+
+
+
+function install_plugin_install_status( $api, $loop = false ) {
+	// This function is called recursively, $loop prevents further loops.
+	if ( is_array( $api ) ) {
+		$api = (object) $api;
+	}
+
+	// Default to a "new" plugin.
+	$status      = 'install';
+	$url         = false;
+	$update_file = false;
+	$version     = '';
+
+	/*
+	 * Check to see if this plugin is known to be installed,
+	 * and has an update awaiting it.
+	 */
+	$update_plugins = get_site_transient( 'update_plugins' );
+	if ( isset( $update_plugins->response ) ) {
+		foreach ( (array) $update_plugins->response as $file => $plugin ) {
+			if ( $plugin->slug === $api->slug ) {
+				$status      = 'update_available';
+				$update_file = $file;
+				$version     = $plugin->new_version;
+				if ( current_user_can( 'update_plugins' ) ) {
+					$url = wp_nonce_url( self_admin_url( 'update.php?action=upgrade-plugin&plugin=' . $update_file ), 'upgrade-plugin_' . $update_file );
+				}
+				break;
+			}
+		}
+	}
+
+	if ( 'install' === $status ) {
+		if ( is_dir( WP_PLUGIN_DIR . '/' . $api->slug ) ) {
+			$installed_plugin = get_plugins( '/' . $api->slug );
+			if ( empty( $installed_plugin ) ) {
+				if ( current_user_can( 'install_plugins' ) ) {
+					$url = wp_nonce_url( self_admin_url( 'update.php?action=install-plugin&plugin=' . $api->slug ), 'install-plugin_' . $api->slug );
+				}
+			} else {
+				$key = array_keys( $installed_plugin );
+				// Use the first plugin regardless of the name.
+				// Could have issues for multiple plugins in one directory if they share different version numbers.
+				$key = reset( $key );
+
+				$update_file = $api->slug . '/' . $key;
+				if ( version_compare( $api->version, $installed_plugin[ $key ]['Version'], '=' ) ) {
+					$status = 'latest_installed';
+				} elseif ( version_compare( $api->version, $installed_plugin[ $key ]['Version'], '<' ) ) {
+					$status  = 'newer_installed';
+					$version = $installed_plugin[ $key ]['Version'];
+				} else {
+					// If the above update check failed, then that probably means that the update checker has out-of-date information, force a refresh.
+					if ( ! $loop ) {
+						delete_site_transient( 'update_plugins' );
+						wp_update_plugins();
+						return install_plugin_install_status( $api, true );
+					}
+				}
+			}
+		} else {
+			// "install" & no directory with that slug.
+			if ( current_user_can( 'install_plugins' ) ) {
+				$url = wp_nonce_url( self_admin_url( 'update.php?action=install-plugin&plugin=' . $api->slug ), 'install-plugin_' . $api->slug );
+			}
+		}
+	}
+	if ( isset( $_GET['from'] ) ) {
+		$url .= '&amp;from=' . urlencode( wp_unslash( $_GET['from'] ) );
+	}
+
+	$file = $update_file;
+	return compact( 'status', 'url', 'version', 'file' );
+}
+
